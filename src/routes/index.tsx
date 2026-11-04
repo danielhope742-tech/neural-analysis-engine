@@ -1,6 +1,9 @@
+
 import { useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { AlertTriangle } from 'lucide-react'
+
+import { DerivAccount } from '@/components/deriv-account'
 import { useMarketFeed } from '@/lib/deriv/use-market-feed'
 import { MARKETS, MARKET_BY_SYMBOL } from '@/lib/deriv/markets'
 import { analyze } from '@/lib/engine/analyzer'
@@ -28,15 +31,17 @@ const WINDOWS = [100, 250, 500, 1000, 5000]
 
 function EngineDashboard() {
   const { feed, frame, snapshot } = useMarketFeed()
+
   const [selected, setSelected] = useState('R_100')
   const [windowSize, setWindowSize] = useState(1000)
   const [filter, setFilter] = useState<ScanFilter>('all')
 
-  // `frame` changes whenever new ticks land, so analyses recompute on that cadence.
   const rows = useMemo<ScanRow[]>(() => {
     if (!feed) return []
-    return MARKETS.map((m) => {
-      const engine = feed.engines.get(m.symbol)!
+
+    return MARKETS.map((market) => {
+      const engine = feed.engines.get(market.symbol)!
+
       return {
         analysis: analyze(engine, windowSize),
         pip: engine.pip,
@@ -47,32 +52,55 @@ function EngineDashboard() {
   }, [feed, frame, windowSize])
 
   const engines = useMemo(
-    () => (feed ? MARKETS.map((m) => feed.engines.get(m.symbol)!) : []),
+    () =>
+      feed
+        ? MARKETS.map((market) => feed.engines.get(market.symbol)!)
+        : [],
     [feed],
   )
+
   const focusFromScanner = (symbol: string) => {
     setSelected(symbol)
+
     document
       .getElementById('focus-market')
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      ?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
   }
 
   const engine = feed?.engines.get(selected)
-  const focus = rows.find((r) => r.analysis.symbol === selected)?.analysis
+
+  const focus = rows.find(
+    (row) => row.analysis.symbol === selected,
+  )?.analysis
 
   return (
     <div className="min-h-screen">
-      <StatusBar snapshot={snapshot} marketCount={MARKETS.length} />
+      <StatusBar
+        snapshot={snapshot}
+        marketCount={MARKETS.length}
+      />
 
       <main className="mx-auto max-w-content px-4 py-5">
+
+        {/* Deriv account connection */}
+        <DerivAccount />
+
+        {/* Multi-market scanner */}
         <div className="mb-6">
           {engines.length ? (
-            <DeepScanner engines={engines} onFocus={focusFromScanner} />
+            <DeepScanner
+              engines={engines}
+              onFocus={focusFromScanner}
+            />
           ) : (
             <Skeleton className="h-72" />
           )}
         </div>
 
+        {/* Selected market and analysis window */}
         <div
           id="focus-market"
           className="mb-5 flex scroll-mt-20 flex-wrap items-end justify-between gap-4"
@@ -81,51 +109,60 @@ function EngineDashboard() {
             <p className="tabular text-[11px] uppercase tracking-[0.25em] text-primary">
               Focus market
             </p>
+
             <h2 className="font-display text-2xl font-bold md:text-3xl">
-              {MARKET_BY_SYMBOL[selected].name}
+              {MARKET_BY_SYMBOL[selected]?.name ?? selected}
             </h2>
           </div>
+
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">
               Analysis window
             </span>
+
             <div
               className="flex rounded-md border bg-card p-0.5"
               role="radiogroup"
               aria-label="Analysis window"
             >
-              {WINDOWS.map((w) => (
+              {WINDOWS.map((window) => (
                 <button
-                  key={w}
+                  key={window}
+                  type="button"
                   role="radio"
-                  aria-checked={windowSize === w}
-                  onClick={() => setWindowSize(w)}
+                  aria-checked={windowSize === window}
+                  onClick={() => setWindowSize(window)}
                   className={cn(
                     'tabular rounded px-2.5 py-1 text-xs transition-colors',
-                    windowSize === w
+                    windowSize === window
                       ? 'bg-primary text-primary-foreground'
                       : 'text-muted-foreground hover:text-foreground',
                   )}
                 >
-                  {w === 5000 ? 'All' : w}
+                  {window === 5000 ? 'All' : window}
                 </button>
               ))}
             </div>
           </div>
         </div>
 
+        {/* Feed warning */}
         {snapshot.status === 'simulated' && (
           <div className="mb-4 flex items-start gap-2 rounded-md border border-chart-4/40 bg-chart-4/10 px-3 py-2 text-xs">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-chart-4" />
+
             <span>
-              The live market feed is unreachable, so the engine is running on a
-              local simulated stream. It keeps retrying and switches back to
-              live data automatically.
+              The live market feed is unreachable, so the engine
+              is running on a local simulated stream. It keeps
+              retrying and switches back to live data automatically.
             </span>
           </div>
         )}
 
+        {/* Main analysis dashboard */}
         <div className="grid gap-4 lg:grid-cols-[20rem_1fr]">
+
+          {/* Market scanner */}
           <aside className="lg:sticky lg:top-20 lg:self-start">
             {rows.length ? (
               <MarketScanner
@@ -140,23 +177,45 @@ function EngineDashboard() {
             )}
           </aside>
 
+          {/* Selected market analysis */}
           {engine && focus && focus.n > 0 ? (
             <div className="grid min-w-0 gap-4">
+
               <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-                <MarketOverview engine={engine} analysis={focus} />
-                <DigitDistribution analysis={focus} />
+                <MarketOverview
+                  engine={engine}
+                  analysis={focus}
+                />
+
+                <DigitDistribution
+                  analysis={focus}
+                />
               </div>
-              <ProbabilityEngine analysis={focus} />
+
+              <ProbabilityEngine
+                analysis={focus}
+              />
+
               <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-                <NeuralPatterns analysis={focus} steps={engine.net.steps} />
-                <AccuracyEstimator analysis={focus} />
+                <NeuralPatterns
+                  analysis={focus}
+                  steps={engine.net.steps}
+                />
+
+                <AccuracyEstimator
+                  analysis={focus}
+                />
               </div>
-              <HistoricalInsight engine={engine} />
+
+              <HistoricalInsight
+                engine={engine}
+              />
             </div>
           ) : (
             <div className="grid gap-4">
               <Skeleton className="h-80" />
               <Skeleton className="h-56" />
+
               <p className="text-center text-sm text-muted-foreground">
                 Loading tick history for all markets…
               </p>
@@ -164,11 +223,13 @@ function EngineDashboard() {
           )}
         </div>
 
+        {/* Risk disclaimer */}
         <footer className="mt-8 border-t pt-4 text-[11px] leading-relaxed text-muted-foreground">
-          Confidence scores measure how unlikely the observed digit skew is
-          under pure chance; they are not a win-rate guarantee. Volatility
-          Indices are designed to be random, so always check the walk-forward
-          accuracy panel and trade responsibly.
+          Confidence scores measure how unlikely the observed
+          digit skew is under pure chance; they are not a win-rate
+          guarantee. Volatility Indices are designed to be random.
+          Always check the walk-forward accuracy panel and trade
+          responsibly.
         </footer>
       </main>
     </div>
