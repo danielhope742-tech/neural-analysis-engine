@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Crosshair, Radar, RotateCw, Sparkles } from 'lucide-react'
 import type { ContractFamily } from '@/lib/engine/analyzer'
@@ -125,34 +126,57 @@ export function DeepScanner({
   const [progress, setProgress] = useState<number | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [countdown, setCountdown] = useState(0)
+  const [selectedMarket, setSelectedMarket] = useState('ALL')
 
   const enginesRef = useRef(engines)
+  const selectedMarketRef = useRef(selectedMarket)
   const optsRef = useRef({ windows, threshold, families, requireAll })
+
   useEffect(() => {
     enginesRef.current = engines
+    selectedMarketRef.current = selectedMarket
     optsRef.current = { windows, threshold, families, requireAll }
-  }, [engines, windows, threshold, families, requireAll])
+  }, [engines, selectedMarket, windows, threshold, families, requireAll])
+
   const prevKeys = useRef<Set<string> | null>(null)
   const timer = useRef<number | null>(null)
 
   const runScan = useCallback(() => {
     if (timer.current !== null) return
+
+    const marketsToScan =
+      selectedMarketRef.current === 'ALL'
+        ? MARKETS
+        : MARKETS.filter(
+            (market) => market.symbol === selectedMarketRef.current,
+          )
+
+    const scanEngines = enginesRef.current.filter((engine) =>
+      marketsToScan.some((market) => market.symbol === engine.symbol),
+    )
+
     let step = 0
     setProgress(0)
+
     timer.current = window.setInterval(() => {
       step++
-      if (step < MARKETS.length) {
+
+      if (step < marketsToScan.length) {
         setProgress(step)
         return
       }
+
       clearInterval(timer.current!)
       timer.current = null
-      const r = scanMarkets(enginesRef.current, optsRef.current)
+
+      const r = scanMarkets(scanEngines, optsRef.current)
       const keys = new Set(r.hits.map((h) => h.key))
       const prev = prevKeys.current
+
       setFresh(
         prev ? new Set([...keys].filter((k) => !prev.has(k))) : new Set(),
       )
+
       prevKeys.current = keys
       setResult(r)
       setProgress(null)
@@ -166,15 +190,21 @@ export function DeepScanner({
     [],
   )
 
-  // First scan once engines have history.
-  const ready = engines.some((e) => e.digits.length >= 30)
+  // Wait for enough history in the selected market.
+  const ready = engines.some(
+    (e) =>
+      (selectedMarket === 'ALL' || e.symbol === selectedMarket) &&
+      e.digits.length >= 30,
+  )
+
   useEffect(() => {
     if (ready && !result && progress === null) runScan()
   }, [ready, result, progress, runScan])
 
-  // Auto-rescan countdown.
+  // Automatic scanning.
   useEffect(() => {
     if (!auto) return
+
     const id = window.setInterval(() => {
       setCountdown((c) => {
         if (c <= 1) {
@@ -184,23 +214,43 @@ export function DeepScanner({
         return c - 1
       })
     }, 1000)
+
     return () => clearInterval(id)
   }, [auto, runScan])
 
-  // Settings changed: rescan so results always match the controls.
-  const settingsKey = `${windows.join(',')}|${threshold}|${families.join(',')}|${requireAll}`
+  // Rescan whenever the selected market or scan settings change.
+  const settingsKey =
+    `${selectedMarket}|${windows.join(',')}|${threshold}|${families.join(',')}|${requireAll}`
+
   const lastSettings = useRef(settingsKey)
+
   useEffect(() => {
     if (lastSettings.current === settingsKey) return
+
     lastSettings.current = settingsKey
     prevKeys.current = null
-    runScan()
-  }, [settingsKey, runScan])
+    setResult(null)
+    setFresh(new Set())
+
+    if (timer.current !== null) {
+      clearInterval(timer.current)
+      timer.current = null
+    }
+
+    setProgress(null)
+
+    if (ready) runScan()
+  }, [settingsKey, ready, runScan])
 
   const scanning = progress !== null
   const sortedWindows = [...windows].sort((a, b) => a - b)
   const hits = result?.hits ?? []
   const visible = showAll ? hits : hits.slice(0, PAGE)
+
+  const displayedMarkets =
+    selectedMarket === 'ALL'
+      ? MARKETS
+      : MARKETS.filter((m) => m.symbol === selectedMarket)
 
   return (
     <section className="rounded-lg border bg-card/80" aria-label="Deep scanner">
@@ -213,15 +263,17 @@ export function DeepScanner({
             Deep scanner
           </h2>
           <span className="hidden text-[11px] text-muted-foreground sm:inline">
-            40 contracts × {MARKETS.length} markets × {windows.length} windows
+            40 contracts × {displayedMarkets.length} market{displayedMarkets.length === 1 ? '' : 's'} × {windows.length} windows
           </span>
         </div>
+
         <div className="flex items-center gap-2">
           {auto > 0 && !scanning && (
             <span className="tabular text-[11px] text-muted-foreground">
               next scan in {countdown}s
             </span>
           )}
+
           <button
             onClick={runScan}
             disabled={scanning || !ready}
@@ -234,6 +286,24 @@ export function DeepScanner({
       </div>
 
       <div className="flex flex-wrap items-end gap-x-5 gap-y-3 border-b px-4 py-3">
+        <label className="flex min-w-44 flex-col gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+          Select market for deep scan
+
+          <select
+            value={selectedMarket}
+            onChange={(event) => setSelectedMarket(event.target.value)}
+            className="h-8 rounded-md border bg-background px-2 text-xs normal-case tracking-normal text-foreground"
+          >
+            <option value="ALL">All 10 markets</option>
+
+            {MARKETS.map((market) => (
+              <option key={market.symbol} value={market.symbol}>
+                {market.name} ({market.symbol})
+              </option>
+            ))}
+          </select>
+        </label>
+
         <Toggles
           label="Contract types"
           options={FAMILIES}
@@ -241,12 +311,14 @@ export function DeepScanner({
           onChange={setFamilies}
           format={(f) => FAMILY_LABEL[f]}
         />
+
         <Toggles
           label="Windows (ticks)"
           options={WINDOW_OPTIONS}
           value={windows}
           onChange={setWindows}
         />
+
         <Segmented
           label="Min confidence"
           options={THRESHOLDS}
@@ -254,6 +326,7 @@ export function DeepScanner({
           onChange={setThreshold}
           format={(t) => `${t}%`}
         />
+
         <Segmented
           label="Auto scan"
           options={AUTO_OPTIONS}
@@ -264,6 +337,7 @@ export function DeepScanner({
           }}
           format={(a) => (a ? `${a}s` : 'Off')}
         />
+
         <label className="flex cursor-pointer items-center gap-2 pb-1 text-xs text-muted-foreground">
           <input
             type="checkbox"
@@ -275,12 +349,13 @@ export function DeepScanner({
         </label>
       </div>
 
-      {/* Progress sweep across markets */}
+      {/* Progress sweep for the selected market or all markets. */}
       <div className="relative h-8 overflow-hidden border-b bg-background/30">
         <div className="flex h-full">
-          {MARKETS.map((m, i) => {
+          {displayedMarkets.map((m, i) => {
             const done = scanning ? i < progress! : !!result
             const now = scanning && i === progress
+
             return (
               <div
                 key={m.symbol}
@@ -298,6 +373,7 @@ export function DeepScanner({
             )
           })}
         </div>
+
         {scanning && (
           <div className="scan-sweep pointer-events-none absolute inset-y-0 left-0 w-1/4 bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
         )}
@@ -307,16 +383,19 @@ export function DeepScanner({
         {result && (
           <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-4">
             <Stat label="Tests run" value={result.tests.toLocaleString()} />
+
             <Stat
               label={`Cleared ≥${threshold}%`}
               value={result.cleared.toLocaleString()}
               hint="Market × contract × window tests whose confidence cleared the threshold"
             />
+
             <Stat
               label="Expected by chance"
               value={`≈ ${result.expectedFalse.toFixed(0)}`}
               hint="How many tests would clear the threshold if every market were perfectly random"
             />
+
             <Stat
               label="Last scan"
               value={new Date(result.at).toLocaleTimeString()}
@@ -359,11 +438,13 @@ export function DeepScanner({
                   <th className="py-2 pr-3 font-medium">#</th>
                   <th className="py-2 pr-3 font-medium">Market</th>
                   <th className="py-2 pr-3 font-medium">Contract</th>
+
                   {sortedWindows.map((w) => (
                     <th key={w} className="py-2 pr-2 text-center font-medium">
                       {w}t
                     </th>
                   ))}
+
                   <th className="py-2 pr-3 text-right font-medium">Agree</th>
                   <th className="py-2 pr-3 text-right font-medium">Prob.</th>
                   <th className="py-2 pr-3 text-right font-medium">Edge</th>
@@ -371,6 +452,7 @@ export function DeepScanner({
                   <th className="py-2" />
                 </tr>
               </thead>
+
               <tbody className="divide-y">
                 {visible.map((h, i) => (
                   <HitRow
@@ -384,6 +466,7 @@ export function DeepScanner({
                 ))}
               </tbody>
             </table>
+
             {hits.length > PAGE && (
               <button
                 onClick={() => setShowAll((s) => !s)}
@@ -415,12 +498,15 @@ function HitRow({
   const m = MARKET_BY_SYMBOL[h.symbol]
   const band = BAND_META[h.lead.band]
   const evaluated = h.perWindow.filter(Boolean).length
+
   return (
     <tr className="hover:bg-muted/40">
       <td className="tabular py-2 pr-3 text-muted-foreground">{rank}</td>
+
       <td className="py-2 pr-3">
         <span className="font-display font-semibold">{m.short}</span>
       </td>
+
       <td className="py-2 pr-3">
         <div className="flex items-center gap-1.5">
           <span
@@ -432,6 +518,7 @@ function HitRow({
           >
             {h.contract.label}
           </span>
+
           {fresh && (
             <span className="flex items-center gap-0.5 rounded bg-accent/15 px-1 py-0.5 text-[9px] font-bold uppercase text-accent">
               <Sparkles className="size-2.5" />
@@ -440,6 +527,7 @@ function HitRow({
           )}
         </div>
       </td>
+
       {h.perWindow.map((s, i) => (
         <td key={i} className="py-2 pr-2 text-center">
           {s ? (
@@ -459,6 +547,7 @@ function HitRow({
           )}
         </td>
       ))}
+
       <td className="tabular py-2 pr-3 text-right font-semibold">
         <span
           className={cn(
@@ -470,9 +559,11 @@ function HitRow({
           {h.agree}/{evaluated}
         </span>
       </td>
+
       <td className="tabular py-2 pr-3 text-right">
         {pct(h.lead.probability)}
       </td>
+
       <td
         className={cn(
           'tabular py-2 pr-3 text-right font-semibold',
@@ -481,9 +572,11 @@ function HitRow({
       >
         {signed(h.lead.edge)}pp
       </td>
+
       <td className="tabular py-2 pr-3 text-right text-muted-foreground">
         {pct(h.recent, 0)}
       </td>
+
       <td className="py-2 text-right">
         <button
           onClick={() => onFocus(h.symbol)}
